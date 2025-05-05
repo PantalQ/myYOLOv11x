@@ -12,6 +12,49 @@ from ultralytics.utils.torch_utils import autocast
 from .metrics import bbox_iou, probiou
 from .tal import bbox2dist
 
+import math
+
+class SIoULoss(nn.Module):
+    """Shape-aware IoU Loss (SIoU)"""
+    def __init__(self, eps: float = 1e-7):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, pred, target):
+        # pred, target: [...,4] 格式 xyxy
+        x1 = torch.max(pred[...,0], target[...,0])
+        y1 = torch.max(pred[...,1], target[...,1])
+        x2 = torch.min(pred[...,2], target[...,2])
+        y2 = torch.min(pred[...,3], target[...,3])
+        inter = (x2 - x1).clamp(0) * (y2 - y1).clamp(0)
+        ap = (pred[...,2]-pred[...,0]) * (pred[...,3]-pred[...,1])
+        at = (target[...,2]-target[...,0]) * (target[...,3]-target[...,1])
+        union = ap + at - inter + self.eps
+        iou = inter / union
+
+        # 中心距离惩罚
+        pc = (pred[..., :2] + pred[..., 2:]) / 2
+        tc = (target[..., :2] + target[..., 2:]) / 2
+        rho2 = ((pc - tc)**2).sum(-1)
+
+        # 包围框对角线惩罚
+        x1c = torch.min(pred[...,0], target[...,0])
+        y1c = torch.min(pred[...,1], target[...,1])
+        x2c = torch.max(pred[...,2], target[...,2])
+        y2c = torch.max(pred[...,3], target[...,3])
+        c2 = ((x2c - x1c)**2 + (y2c - y1c)**2).clamp(self.eps)
+
+        # 形状 & 角度惩罚
+        wp, hp = pred[...,2]-pred[...,0], pred[...,3]-pred[...,1]
+        wt, ht = target[...,2]-target[...,0], target[...,3]-target[...,1]
+        v = (4/math.pi**2) * (torch.atan(wt/ht+1e-6) - torch.atan(wp/hp+1e-6))**2
+        with torch.no_grad():
+            alpha = v / (1 - iou + v + self.eps)
+        shape_cost = torch.sqrt(((wp - wt)**2 + (hp - ht)**2) / (wt**2 + ht**2 + self.eps))
+
+        siou = iou - (rho2 / c2 + alpha * v + shape_cost)
+        return 1 - siou
+
 
 class VarifocalLoss(nn.Module):
     """
@@ -107,8 +150,9 @@ class BboxLoss(nn.Module):
     def forward(self, pred_dist, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask):
         """Compute IoU and DFL losses for bounding boxes."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
-        iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
-        loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        # 使用 SIoU 替代 CIoU
+        siou_loss = SIoULoss()(pred_bboxes[fg_mask], target_bboxes[fg_mask])
+        loss_iou = (siou_loss * weight).sum() / target_scores_sum
 
         # DFL loss
         if self.dfl_loss:
