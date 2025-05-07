@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
+from mamba_ssm import Mamba
 
 from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
 from .transformer import TransformerBlock
@@ -43,6 +44,7 @@ __all__ = (
     "C3k2",
     "C2fPSA",
     "C2PSA",
+    "MambaBlock",
     "RepVGGDW",
     "CIB",
     "C2fCIB",
@@ -1964,3 +1966,19 @@ class SAVPE(nn.Module):
         aggregated = score.transpose(-2, -3) @ x.reshape(B, self.c, C // self.c, -1).transpose(-1, -2)
 
         return F.normalize(aggregated.transpose(-2, -3).reshape(B, Q, -1), dim=-1, p=2)
+
+class MambaBlock(nn.Module):
+    def __init__(self, channels:int, d_state=32, d_conv=4, expand=2):
+        super().__init__()
+        self.mamba = Mamba(
+            d_model=channels,
+            d_state=d_state,
+            d_conv=d_conv,
+            expand=expand
+        )
+    def forward(self, x):
+        B,C,H,W = x.shape
+        seq = x.flatten(2).permute(0,2,1)   # [B, L, C]
+        out = self.mamba(seq)              # [B, L, C]
+        out = out.permute(0,2,1).view(B,C,H,W)
+        return x + out                     # 残差
