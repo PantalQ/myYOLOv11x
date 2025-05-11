@@ -69,6 +69,50 @@ def box_iou(box1, box2, eps=1e-7):
     # IoU = inter / (area1 + area2 - inter)
     return inter / ((a2 - a1).prod(2) + (b2 - b1).prod(2) - inter + eps)
 
+import torch
+import numpy as np
+
+def bbox_siou(box1, box2, eps: float = 1e-7) -> torch.Tensor:
+    """
+    SIoU: Shape‐aware IoU Loss
+    box1, box2: tensors of shape [N,4] in xyxy 格式
+    返回：SIoU 值 Tensor[N]
+    """
+    # 1. 解析坐标
+    b1_x1, b1_y1, b1_x2, b1_y2 = box1.unbind(-1)
+    b2_x1, b2_y1, b2_x2, b2_y2 = box2.unbind(-1)
+
+    # 2. 交集与并集
+    inter = (torch.min(b1_x2, b2_x2) - torch.max(b1_x1, b2_x1)).clamp(0) * \
+            (torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)).clamp(0)
+    w1, h1 = (b1_x2 - b1_x1 + eps), (b1_y2 - b1_y1 + eps)
+    w2, h2 = (b2_x2 - b2_x1 + eps), (b2_y2 - b2_y1 + eps)
+    union = w1 * h1 + w2 * h2 - inter + eps
+    iou = inter / union
+
+    # 3. 中心偏移与角度惩罚
+    cw = torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)
+    ch = torch.max(b1_y2, b2_y2) - torch.min(b1_y1, b2_y1)
+    s_cw = ((b2_x1 + b2_x2) - (b1_x1 + b1_x2)) * 0.5
+    s_ch = ((b2_y1 + b2_y2) - (b1_y1 + b1_y2)) * 0.5
+    sigma = torch.sqrt(s_cw ** 2 + s_ch ** 2) + eps
+    sin_alpha = torch.where(
+        (torch.abs(s_cw) / sigma) > (2**0.5 / 2),
+        torch.abs(s_ch) / sigma,
+        torch.abs(s_cw) / sigma
+    )
+    angle_cost = 1 - 2 * torch.sin(torch.asin(sin_alpha) - np.pi/4).pow(2)
+
+    # 4. 距离与形状惩罚
+    rho_x = (s_cw / (cw + eps)).pow(2)
+    rho_y = (s_ch / (ch + eps)).pow(2)
+    gamma = 2 - angle_cost
+    distance_cost = 2 - torch.exp(gamma * rho_x) - torch.exp(gamma * rho_y)
+    shape_cost = 1 - torch.exp(-((w2 - w1).abs() / (w2 + w1 + eps) +
+                                (h2 - h1).abs() / (h2 + h1 + eps)))
+
+    # 5. 最终 SIoU
+    return iou - 0.5 * (distance_cost + shape_cost)
 
 def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, eps=1e-7):
     """
