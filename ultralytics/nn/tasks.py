@@ -1,5 +1,5 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
-
+from .AddModules import *
 import contextlib
 import pickle
 import re
@@ -1398,6 +1398,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             SCDown,
             C2fCIB,
             A2C2f,
+            SimAM,
+            C3k2_SimAM,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
