@@ -82,34 +82,44 @@ def bbox_siou(box1, box2, eps: float = 1e-7) -> torch.Tensor:
     b1_x1, b1_y1, b1_x2, b1_y2 = box1.unbind(-1)
     b2_x1, b2_y1, b2_x2, b2_y2 = box2.unbind(-1)
 
-    # 2. 交集与并集
-    inter = (torch.min(b1_x2, b2_x2) - torch.max(b1_x1, b2_x1)).clamp(0) * \
-            (torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)).clamp(0)
-    w1, h1 = (b1_x2 - b1_x1 + eps), (b1_y2 - b1_y1 + eps)
-    w2, h2 = (b2_x2 - b2_x1 + eps), (b2_y2 - b2_y1 + eps)
+    # 2. 交集与并集，add eps 确保非零分母
+    inter_w = (torch.min(b1_x2, b2_x2) - torch.max(b1_x1, b2_x1)).clamp(min=0.0)
+    inter_h = (torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)).clamp(min=0.0)
+    inter = inter_w * inter_h
+    w1, h1 = (b1_x2 - b1_x1).clamp(min=eps), (b1_y2 - b1_y1).clamp(min=eps)
+    w2, h2 = (b2_x2 - b2_x1).clamp(min=eps), (b2_y2 - b2_y1).clamp(min=eps)
     union = w1 * h1 + w2 * h2 - inter + eps
-    iou = inter / union
+    iou = inter / union  # 基准 IoU:contentReference[oaicite:4]{index=4}
 
     # 3. 中心偏移与角度惩罚
-    cw = torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)
-    ch = torch.max(b1_y2, b2_y2) - torch.min(b1_y1, b2_y1)
+    cw = (torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)).clamp(min=eps)
+    ch = (torch.max(b1_y2, b2_y2) - torch.min(b1_y1, b2_y1)).clamp(min=eps)
     s_cw = ((b2_x1 + b2_x2) - (b1_x1 + b1_x2)) * 0.5
     s_ch = ((b2_y1 + b2_y2) - (b1_y1 + b1_y2)) * 0.5
-    sigma = torch.sqrt(s_cw ** 2 + s_ch ** 2) + eps
+    sigma = torch.sqrt(s_cw.pow(2) + s_ch.pow(2)).clamp(min=eps)
+    # sin_alpha 裁剪到 [-1+eps,1-eps] 以保证 asin 有效:contentReference[oaicite:5]{index=5}
     sin_alpha = torch.where(
-        (torch.abs(s_cw) / sigma) > (2**0.5 / 2),
-        torch.abs(s_ch) / sigma,
-        torch.abs(s_cw) / sigma
+        (s_cw.abs() / sigma) > (2**0.5 / 2),
+        (s_ch.abs() / sigma),
+        (s_cw.abs() / sigma)
     )
-    angle_cost = 1 - 2 * torch.sin(torch.asin(sin_alpha) - np.pi/4).pow(2)
+    sin_alpha = sin_alpha.clamp(min=-1 + eps, max=1 - eps)
+    angle = torch.asin(sin_alpha)  # 安全调用 asin:contentReference[oaicite:6]{index=6}
+    angle_cost = 1 - 2 * torch.sin(angle - np.pi / 4).pow(2)
 
     # 4. 距离与形状惩罚
     rho_x = (s_cw / (cw + eps)).pow(2)
     rho_y = (s_ch / (ch + eps)).pow(2)
-    gamma = 2 - angle_cost
-    distance_cost = 2 - torch.exp(gamma * rho_x) - torch.exp(gamma * rho_y)
-    shape_cost = 1 - torch.exp(-((w2 - w1).abs() / (w2 + w1 + eps) +
-                                (h2 - h1).abs() / (h2 + h1 + eps)))
+    gamma = (2 - angle_cost).clamp(min=eps)  # 防止 gamma 为 0
+    # 对指数函数输入进行限幅，避免 overflow:contentReference[oaicite:7]{index=7}
+    exp_x = torch.exp((gamma * rho_x).clamp(min=-50, max=50))
+    exp_y = torch.exp((gamma * rho_y).clamp(min=-50, max=50))
+    distance_cost = 2 - exp_x - exp_y
+
+    # 长宽比形状惩罚，加入 eps 并限幅避免数值问题
+    delta_w = ((w2 - w1).abs() / (w2 + w1 + eps)).clamp(max=1.0)
+    delta_h = ((h2 - h1).abs() / (h2 + h1 + eps)).clamp(max=1.0)
+    shape_cost = 1 - torch.exp(-(delta_w + delta_h))
 
     # 5. 最终 SIoU
     return iou - 0.5 * (distance_cost + shape_cost)
