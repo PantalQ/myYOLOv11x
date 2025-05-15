@@ -18,5 +18,6 @@ gmc_method: sparseOptFlow # method of global motion compensation
 # ReID model related thresh
 proximity_thresh: 0.5 # minimum IoU for valid match with ReID
 appearance_thresh: 0.8 # minimum appearance similarity for ReID
-with_reid: False
+with_reid: True
 model: auto # uses native features if detector is YOLO else yolo11n-cls.pt
+reid_weights: '/root/autodl-tmp/project_yolo/myYOLOv11x/ultralytics/tracker_weights/osnet_x1_0_market_256x128_amsgrad_ep150_stp60_lr0.0015_b64_fb10_softmax_labelsmooth_flip.pth'
