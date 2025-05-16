@@ -198,7 +198,11 @@ class BOTSORT(BYTETracker):
         self.encoder = (
             (lambda feats, s: [f.cpu().numpy() for f in feats])  # native features do not require any model
             if args.with_reid and self.args.model == "auto"
-            else ReID(args.model)
+            else ReID(
+                    model_name   = args.model,
+                    weight_path  = args.reid_weights,
+                    num_ids      = getattr(args, "num_ids", None)
+            )
             if args.with_reid
             else None
         )
@@ -245,7 +249,7 @@ class BOTSORT(BYTETracker):
 class ReID:
     """YOLO model as encoder for re-identification."""
 
-    def __init__(self, model_name, reid_weights=None, num_ids=None):
+    def __init__(self, model_name, weights_path=None, num_ids=None):
         """Initialize encoder for re-identification."""
         from ultralytics import YOLO
         import torchreid
@@ -257,11 +261,10 @@ class ReID:
                 num_classes=num_ids or 1000,    # 1000 对 ImageNet，或你的ID数
                 loss="softmax"
             )
-            # 再加载你在 botsort.yaml 里指定的权重
-            torchreid.utils.load_pretrained_weights(
-                self.model,
-                reid_weights  # 例如 '/path/to/osnet_x1_0_msmt17.pth'
-            )
+            if weights_path:
+                torchreid.utils.load_pretrained_weights(self.model, weights_path)
+            else:
+                raise ValueError(f"No reid_weights provided for {model_name}")
         else:
             # 仍然支持老的 ResNet50 via YOLO class
             self.model = YOLO(model_name)

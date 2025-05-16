@@ -21,3 +21,4 @@ appearance_thresh: 0.6 # minimum appearance similarity for ReID
 with_reid: True
 model: osnet_x1_0 # uses native features if detector is YOLO else yolo11n-cls.pt'
 reid_weights: E:\AILearning\Changed YOLO\myYOLOv11x\ultralytics\tracker_weights\osnet_x1_0_market_256x128_amsgrad_ep150_stp60_lr0.0015_b64_fb10_softmax_labelsmooth_flip.pth
+num_ids: 1501
